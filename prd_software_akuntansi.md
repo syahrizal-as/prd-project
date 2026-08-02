@@ -8,9 +8,9 @@
 * **Product Name:** AccuCloud / Smart Ledger Engine
 * **Target Audience:** UMKM, Perusahaan Menengah (SMEs), Konsultan Pajak & Akuntan
 * **Platform:** Web Application (Responsive) & API Gateway
-* **Document Version:** v1.1.0
+* **Document Version:** v1.2.0
 * **Author:** Lead Product Manager & System Architect
-* **Last Updated:** 01-08-2026
+* **Last Updated:** 02-08-2026
 
 ### Changelog
 
@@ -18,6 +18,7 @@
 |---|---|---|
 | v1.0.0 | - | Versi awal PRD & schema |
 | v1.1.0 | 01-08-2026 | Tambah tabel pajak (tax_rates, invoice_taxes), payments & payment_allocations, bank_accounts/bank_statements/reconciliation_entries, sales_orders & purchase_orders, exchange_rates, audit_logs, roles, fiscal_periods; tambah kolom multi-currency, tax_invoice_number (e-Faktur), source_type, cash_flow_category, normal_balance, updated_at/deleted_at; tambah Row Level Security & aturan validasi double-entry; tambah FR pajak, multi-currency, import, dashboard, audit trail |
+| v1.2.0 | 02-08-2026 | Tambah Section 6 Business Process Flowcharts (Mermaid): overview sistem, order-to-cash, procure-to-pay, validasi double-entry, rekonsiliasi bank, period closing, alur pajak e-Faktur/e-Bupot |
 
 ---
 
@@ -103,7 +104,134 @@ Produk ini dirancang sebagai platform akuntansi berbasis cloud (*SaaS*) yang int
 
 ---
 
-## 6. Database Schema Design (Entity Relationship Layout)
+## 6. Business Process Flowcharts (Mermaid)
+
+Diagram alur berikut merepresentasikan proses bisnis inti (sesuai functional requirements pada Section 4). Semua diagram memakai sintaks **Mermaid** — otomatis render di GitHub, GitLab, VS Code, Obsidian, dan Typora.
+
+### 6.1. Alur Sistem (Overview)
+
+```mermaid
+flowchart LR
+    U["User (Owner / Accountant / Konsultan)"] --> M["Modul Aplikasi (RBAC)"]
+    M --> S["Sales & AR"]
+    M --> P["Purchasing & AP"]
+    M --> C["Cash & Bank"]
+    S --> G["Double-Entry Engine (General Ledger)"]
+    P --> G
+    C --> G
+    G --> T["Pajak (e-Faktur & e-Bupot)"]
+    G --> R["Laporan Keuangan"]
+    G --> D["Dashboard"]
+```
+
+### 6.2. Alur Penjualan — Order to Cash
+
+```mermaid
+flowchart TD
+    A(["Mulai: Buat Quotation"]) --> B["Sales Order (SO)"]
+    B --> C{"Status SO?"}
+    C -->|"DRAFT"| B
+    C -->|"CONFIRMED"| D["Terbit Sales Invoice + No. Seri e-Faktur"]
+    D --> E["Hitung Pajak (DPP + PPN/PPh) -> invoice_taxes"]
+    E --> F["Posting Jurnal: Piutang (D) / Pendapatan (K)"]
+    F --> G["Customer Bayar (Receipt)"]
+    G --> H["Alokasi Pembayaran Multi-Faktur"]
+    H --> I{"Sisa Piutang = 0?"}
+    I -->|"Belum"| J["Status PARTIALLY_PAID / UNPAID"]
+    J --> G
+    I -->|"Lunas"| K["Status PAID"]
+    K --> L(["Selesai: Laporan + PPN Keluaran"])
+```
+
+### 6.3. Alur Pembelian — Procure to Pay
+
+```mermaid
+flowchart TD
+    A(["Mulai"]) --> B["Purchase Order (PO)"]
+    B --> C{"Status PO?"}
+    C -->|"DRAFT"| B
+    C -->|"CONFIRMED"| D["Terima Vendor Bill / Tagihan"]
+    D --> E["Hitung Pajak (PPN Masukan)"]
+    E --> F["Posting Jurnal: Beban (D) / Hutang (K)"]
+    F --> G["Pantau Jatuh Tempo"]
+    G --> H["Bayar Vendor (Payment)"]
+    H --> I["Alokasi Pembayaran ke Bill"]
+    I --> J{"Sisa Hutang = 0?"}
+    J -->|"Belum"| K["Status PARTIALLY_PAID / UNPAID"]
+    K --> H
+    J -->|"Lunas"| L["Status PAID"]
+    L --> M(["Selesai: Laporan + PPN Masukan"])
+```
+
+### 6.4. Alur Jurnal & Validasi Double-Entry
+
+```mermaid
+flowchart TD
+    A(["Input Transaksi"]) --> B{"Sumber Transaksi?"}
+    B -->|"Modul Pembantu"| C["Generate Jurnal Otomatis"]
+    B -->|"Manual"| D["Input Debit & Kredit"]
+    C --> E{"Validasi: SUM(Debit) = SUM(Kredit)?"}
+    D --> E
+    E -->|"Tidak"| F["Tolak - Jurnal Tidak Balance"]
+    F --> A
+    E -->|"Ya"| G{"Periode Masih Terbuka?"}
+    G -->|"Tidak (Closed)"| H["Tolak: Period Closed"]
+    H --> A
+    G -->|"Ya"| I["Status POSTED"]
+    I --> J["Akumulasi ke Buku Besar & Neraca Saldo"]
+    J --> K(["Selesai"])
+```
+
+### 6.5. Alur Rekonsiliasi Bank
+
+```mermaid
+flowchart TD
+    A(["Mulai"]) --> B["Import Rekening Koran (CSV/Excel/MT940)"]
+    B --> C["Parsing & Simpan ke bank_statements"]
+    C --> D["Auto-Match dengan Payments / Jurnal"]
+    D --> E{"Status Match?"}
+    E -->|"MATCHED"| F["Tandai is_reconciled = TRUE"]
+    E -->|"Tidak Cocok"| G["Review Manual"]
+    G --> H{"Perlu Penyesuaian?"}
+    H -->|"Ya"| I["Buat Jurnal Penyesuaian (ADJUSTED)"]
+    H -->|"Tidak"| J["Biarkan UNMATCHED"]
+    F --> K{"Saldo Buku = Saldo Bank?"}
+    I --> K
+    J --> K
+    K -->|"Ya"| L(["Selesai: Laporan Rekonsiliasi"])
+    K -->|"Tidak"| G
+```
+
+### 6.6. Alur Period Closing
+
+```mermaid
+flowchart TD
+    A(["Mulai: Akhir Periode"]) --> B{"Ada Jurnal Belum Diposting?"}
+    B -->|"Ada"| C["Review & Posting Jurnal Tertunda"]
+    C --> B
+    B -->|"Tidak Ada"| D["Verifikasi Semua Jurnal Balance"]
+    D --> E{"Semua Balance?"}
+    E -->|"Tidak"| F["Perbaiki / Buat Jurnal Pembalik"]
+    F --> D
+    E -->|"Ya"| G["Kunci Periode: is_closed = TRUE"]
+    G --> H["Tolak Semua Perubahan di Periode Tersebut"]
+    H --> I(["Selesai"])
+```
+
+### 6.7. Alur Pajak (e-Faktur & e-Bupot)
+
+```mermaid
+flowchart TD
+    A(["Faktur Terbit / Tagihan Diterima"]) --> B["Simpan No. Seri e-Faktur (tax_invoice_number)"]
+    B --> C["Akumulasi PPN Keluaran & PPN Masukan"]
+    C --> D["Generate CSV/XML e-Faktur & e-Bupot"]
+    D --> E["Upload ke DJP / Siapkan SPT PPN & PPh"]
+    E --> F(["Selesai"])
+```
+
+---
+
+## 7. Database Schema Design (Entity Relationship Layout)
 
 Database dirancang menggunakan pendekatan **Relational Database Management System (RDBMS)** seperti PostgreSQL dengan pola multi-tenant (shared schema + organization_id + Row Level Security).
 
@@ -155,9 +283,9 @@ organizations --> exchange_rates (base_currency, quote_currency, rate, rate_date
 
 ---
 
-## 7. Database Tables Definition & DDL Spec
+## 8. Database Tables Definition & DDL Spec
 
-### 7.1. Organization & User Management (Multi-Tenancy)
+### 8.1. Organization & User Management (Multi-Tenancy)
 
 #### Table: `organizations`
 | Column Name | Data Type | Constraints | Description |
@@ -195,7 +323,7 @@ organizations --> exchange_rates (base_currency, quote_currency, rate, rate_date
 
 ---
 
-### 7.2. Chart of Accounts (CoA) & General Ledger
+### 8.2. Chart of Accounts (CoA) & General Ledger
 
 #### Table: `accounts`
 | Column Name | Data Type | Constraints | Description |
@@ -256,7 +384,7 @@ organizations --> exchange_rates (base_currency, quote_currency, rate, rate_date
 
 ---
 
-### 7.3. Contacts & Transactions (AR & AP)
+### 8.3. Contacts & Transactions (AR & AP)
 
 #### Table: `contacts`
 | Column Name | Data Type | Constraints | Description |
@@ -412,7 +540,7 @@ organizations --> exchange_rates (base_currency, quote_currency, rate, rate_date
 
 ---
 
-### 7.4. Cash & Bank (FR-CB-001/002/003)
+### 8.4. Cash & Bank (FR-CB-001/002/003)
 
 #### Table: `bank_accounts` — BARU v1.1
 | Column Name | Data Type | Constraints | Description |
@@ -453,7 +581,7 @@ organizations --> exchange_rates (base_currency, quote_currency, rate, rate_date
 
 ---
 
-### 7.5. Multi-Currency & Audit
+### 8.5. Multi-Currency & Audit
 
 #### Table: `exchange_rates` — BARU v1.1 (FR-MC-002)
 | Column Name | Data Type | Constraints | Description |
@@ -481,7 +609,7 @@ organizations --> exchange_rates (base_currency, quote_currency, rate, rate_date
 
 ---
 
-## 8. SQL DDL Implementation Code
+## 9. SQL DDL Implementation Code
 
 ```sql
 -- ============================================================================
@@ -829,7 +957,7 @@ CREATE INDEX idx_bank_stmt_acct      ON bank_statements (bank_account_id, is_rec
 
 ---
 
-## 9. Row Level Security (Multi-Tenant Isolation) — BARU v1.1
+## 10. Row Level Security (Multi-Tenant Isolation) — BARU v1.1
 
 Isolasi antar tenant TIDAK boleh hanya mengandalkan filter `WHERE organization_id = ?` di query. Wajib mengaktifkan **Row Level Security (RLS)** di PostgreSQL untuk semua tabel yang memiliki `organization_id`:
 
@@ -851,7 +979,7 @@ CREATE POLICY tenant_isolation ON users
 
 ---
 
-## 10. Data Integrity Rules (Double-Entry Engine) — BARU v1.1
+## 11. Data Integrity Rules (Double-Entry Engine) — BARU v1.1
 
 Aturan validasi WAJIB diimplementasikan di app-layer sebelum transaksi di-commit:
 
@@ -864,7 +992,7 @@ Aturan validasi WAJIB diimplementasikan di app-layer sebelum transaksi di-commit
 
 ---
 
-## 11. Conclusion & Next Steps
+## 12. Conclusion & Next Steps
 
 PRD dan Schema Database v1.1 ini menjadi landasan teknis untuk fase pengembangan produk setara **Jurnal.id / Accurate Online**. Tahap berikutnya meliputi:
 
