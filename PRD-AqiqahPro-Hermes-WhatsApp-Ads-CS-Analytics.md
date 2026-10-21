@@ -2,20 +2,20 @@
 
 > **Dokumen:** Product Requirements Document (PRD)  
 > **Produk:** AqiqahPro — Hermes WhatsApp & Ads Intelligence  
-> **Versi:** 1.0 Draft  
+> **Versi:** 1.1 Draft  
 > **Tanggal:** 21 Oktober 2026  
 > **Owner:** AqiqahPro  
 > **Status:** Siap untuk review produk, legal/privacy, dan teknis  
-> **Arsitektur MVP:** CS tetap membalas dari HP; WAHA hanya ingestion; Hermes read-only  
+> **Arsitektur rekomendasi:** CS tetap membalas dari HP; Kirimdev Cloud API Coexistence sebagai konektor utama; WAHA sebagai alternatif MVP; Hermes read-only  
 
 
 ## 1. Ringkasan
 
 AqiqahPro Hermes adalah produk analitik WhatsApp pasif untuk membantu manajemen memahami sumber prospek, kecepatan respons, kualitas percakapan, dan peluang perbaikan layanan pelanggan tanpa mengubah cara kerja CS di ponsel.
 
-WAHA hanya mengirimkan webhook pesan masuk dan keluar ke basis data. WAHA mendokumentasikan event `message` untuk inbound dan `message.any` untuk seluruh pesan termasuk pesan sendiri, serta mendukung HMAC dan retry webhook.[1] Hermes hanya membaca data tersebut untuk analisis dan visualisasi. Hermes tidak mengirim pesan, tidak membuat balasan otomatis, tidak mengubah percakapan, dan tidak mengendalikan akun WhatsApp.
+Produk mendukung dua opsi konektor ingestion. Opsi yang direkomendasikan adalah **Kirimdev melalui WhatsApp Cloud API Coexistence**, yaitu jalur resmi Meta yang memungkinkan nomor tetap digunakan oleh CS di WhatsApp Business App pada HP. Dokumentasi Kirimdev menyatakan event `message.received` untuk inbound, `message.sent` untuk outbound—termasuk *phone-app echo* dengan `source: app`—serta `message.status` untuk delivery/read status.[4][5] Opsi alternatif adalah WAHA melalui WhatsApp Web, dengan event `message` dan `message.any`, HMAC, serta retry webhook.[1]
 
-Attribution iklan melalui WhatsApp Web bersifat best-effort karena metadata kampanye atau identitas pengirim pesan keluar tidak selalu tersedia. Migrasi masa depan ke WhatsApp Cloud API Coexistence dipertimbangkan untuk meningkatkan kelengkapan attribution dan stabilitas integrasi. Meta mendokumentasikan bahwa Coexistence memungkinkan nomor yang sama tetap digunakan untuk chat 1:1 di WhatsApp Business App sekaligus terhubung ke Cloud API, dengan sinkronisasi pesan melalui webhook terkait.[3]
+Hermes hanya membaca data hasil ingestion untuk analisis dan visualisasi. Hermes tidak mengirim pesan, membuat auto-reply, mengubah percakapan, maupun memegang kredensial konektor yang memiliki kemampuan kirim. Attribution WAHA tetap best-effort; Kirimdev/Cloud API diprioritaskan untuk stabilitas dan metadata referral yang lebih terstruktur. Status “official” pada dokumen ini berarti **transport WhatsApp Business Platform/Cloud API resmi Meta**, bukan pernyataan bahwa Kirimdev telah diverifikasi sebagai Meta Business Partner/BSP. Meta mendokumentasikan bahwa Coexistence memungkinkan nomor yang sama tetap digunakan untuk chat 1:1 di WhatsApp Business App sekaligus terhubung ke Cloud API.[3]
 
 ## 2. Tujuan Produk
 
@@ -77,9 +77,11 @@ Attribution iklan melalui WhatsApp Web bersifat best-effort karena metadata kamp
 
 ```mermaid
 flowchart LR
-    C[Pelanggan] <-->|Chat| W[WhatsApp di ponsel CS]
-    W -->|Sinkronisasi WhatsApp Web| H[WAHA]
-    H -->|Webhook inbound dan outbound| I[Ingestion]
+    C[Pelanggan] <-->|Chat| W[WhatsApp Business di ponsel CS]
+    W -->|Cloud API Coexistence; utama| K[Kirimdev]
+    W -.->|Linked device; alternatif| H[WAHA]
+    K -->|Signed webhook inbound dan outbound| I[Ingestion]
+    H -.->|Webhook inbound dan outbound| I
     I --> D[(Database analitik)]
     D -->|Read-only| A[Hermes Analytics]
     A --> B[Dashboard dan laporan]
@@ -88,15 +90,17 @@ flowchart LR
     X[Platform iklan / landing page] -.->|UTM, click ID, referral, prefilled text jika tersedia| D
     O[Sistem pesanan, opsional] -.->|Status konversi terkontrol| D
 
-    A x-->|Tidak ada send/reply API| W
-    A x-->|Tidak mengubah chat| H
+    A x-->|Tidak ada credential/send API| K
+    A x-->|Tidak ada credential/send API| H
+    A x-->|Tidak mengubah chat| W
 ```
 
 ### Kontrak batas produk
 
-- WAHA berperan sebagai sumber ingestion saja.
+- Kirimdev atau WAHA hanya berperan sebagai sumber ingestion.
 - Webhook masuk dan keluar disimpan sebagai event sumber yang dapat diaudit.
-- Hermes hanya memiliki akses baca ke data analitik yang diperlukan.
+- Hermes hanya memiliki akses baca ke curated analytics views.
+- API key, MCP, dashboard credential, serta endpoint send konektor tidak diberikan kepada Hermes.
 - Tidak ada fitur, tombol, tool, kredensial, atau endpoint Hermes untuk mengirim pesan.
 - Kegagalan analitik tidak boleh mengganggu aktivitas chat CS di ponsel.
 
@@ -296,6 +300,50 @@ WhatsApp Web/WAHA diperlakukan sebagai sumber best-effort: payload internal berb
 - melarang klaim ROAS presisi jika denominator biaya atau linkage conversion tidak lengkap;
 - tidak mengisi data yang hilang dengan tebakan tersembunyi.
 
+### 9.7 Pilihan Konektor: Kirimdev vs WAHA
+
+Untuk kebutuhan AqiqahPro—CS tetap chat melalui HP, connector hanya mengirim data ke database, dan Hermes read-only—**Kirimdev Cloud API Coexistence menjadi pilihan utama**, sedangkan WAHA menjadi alternatif pilot/rollback. Kirimdev mendokumentasikan Cloud API, onboarding melalui Meta Embedded Signup, webhook bertanda tangan, deduplikasi event, serta *phone-app echo* untuk pesan yang dikirim dari aplikasi HP.[4][5][6]
+
+| Kriteria | Kirimdev + Cloud API Coexistence | WAHA + WhatsApp Web |
+|---|---|---|
+| Status jalur WhatsApp | **Official transport:** WhatsApp Business Platform/Cloud API Meta; status BSP/Meta Business Partner vendor belum diklaim tanpa bukti direktori resmi | **Unofficial transport:** otomasi/linked device WhatsApp Web |
+| Cara koneksi | Meta Embedded Signup dan Coexistence | Pairing QR sebagai linked device |
+| CS tetap memakai nomor yang sama di HP | Ya, jika nomor lolos onboarding Coexistence | Ya, selama linked-device session aktif |
+| Stabilitas kontrak | Lebih kuat karena mengikuti kontrak Cloud API | Lebih rentan terhadap perubahan WhatsApp Web/engine |
+| Risiko logout/block dari connector | Lebih rendah; tetap tunduk kebijakan Meta dan quality controls | Lebih tinggi dan tidak nol walau hanya ingestion |
+| Inbound webhook | `message.received` | `message`/event engine terkait |
+| Outbound dari HP | `message.sent` dengan `source: app` menurut katalog event; wajib dibuktikan lewat pilot | `message.any`/`fromMe`; kelengkapan wajib dibuktikan lewat pilot |
+| Delivery/read status | `message.status` (`sent`, `delivered`, `read`, `failed`, dan jenis terkait) | Bergantung engine dan payload WAHA |
+| Metadata Click-to-WhatsApp Ads | Mengikuti payload referral Cloud API; capture aktual `source_id`/`ctwa_clid` tetap wajib diuji | Best-effort dari payload internal, dapat hilang/berubah |
+| Akurasi attribution | Potensial lebih tinggi dan lebih terstruktur; tetap memerlukan confidence/coverage | Lebih rendah; selalu tampilkan best-effort dan Unknown |
+| History/reconciliation | API conversation/history dan retention mengikuti paket/vendor; kemampuan import/replay harus diuji | History sync lebih fleksibel tetapi bergantung session/engine |
+| Attribution operator | Pesan dapat diketahui berasal dari app, tetapi siapa CS yang mengetik belum otomatis diketahui | `fromMe` menunjukkan akun bisnis, bukan identitas individual CS |
+| Webhook security | HMAC/signature, event ID, retry/delivery log menurut dokumentasi vendor | HMAC dan retry tersedia; konfigurasi/deployment dikelola sendiri |
+| Biaya | Langganan Kirimdev mulai dari harga publik vendor; biaya Meta dapat terpisah dan harus diverifikasi saat pembelian[4] | WAHA Core dapat self-host; WAHA Plus/infrastruktur/operasional dapat menambah biaya |
+| Vendor lock-in | Sedang: kontrak API/event Kirimdev dan retention vendor | Lebih rendah untuk data lokal, tetapi lock-in pada format/engine WAHA tetap ada |
+| Kontrol raw payload/data | Bergantung kontrak vendor, paket, retention, export, dan deletion | Lebih besar bila self-hosted |
+| Compliance/privacy | Jalur resmi Meta, tetapi DPA, lokasi data, subprocessor, retention, export dan deletion tetap harus direview | Tanggung jawab self-hosting lebih besar; jalur tidak resmi menambah risiko kebijakan |
+| Beban operasional | Lebih rendah; vendor mengelola connector | Lebih tinggi: hosting, session health, reconnect, upgrade, dan monitoring |
+| Jalur migrasi | Canonical event model harus memungkinkan pindah vendor Cloud API langsung | Canonical event model memungkinkan migrasi ke Kirimdev/Cloud API |
+
+**Plus Kirimdev:** jalur resmi Cloud API, cocok untuk nomor bisnis utama, Coexistence mempertahankan workflow HP, event inbound/outbound/status terdokumentasi, security webhook lebih terstruktur, dan peluang attribution iklan lebih baik.
+
+**Minus Kirimdev:** ketergantungan vendor, biaya paket dan kemungkinan biaya Meta, retention/export/data residency harus dikonfirmasi, API key umum berpotensi send-capable, dan identitas CS individual tetap tidak otomatis tersedia hanya dari *phone-app echo*.
+
+**Plus WAHA:** biaya awal dan kontrol self-hosting berpotensi lebih rendah, raw payload lebih mudah dikuasai, deployment cepat, dan cocok untuk eksperimen terisolasi.
+
+**Minus WAHA:** bukan jalur resmi Meta, risiko disconnect/perubahan engine/block lebih tinggi, metadata Ads dan history tidak dijamin stabil, serta membutuhkan operasi connector sendiri.
+
+### 9.8 Keputusan dan Gate Pilot
+
+1. Gunakan Kirimdev Coexistence sebagai kandidat default untuk nomor produksi AqiqahPro.
+2. Pertahankan WAHA sebagai alternatif pilot, nomor non-kritis, atau rollback—bukan sebagai sumber attribution presisi.
+3. Sebelum keputusan final, jalankan pilot 7–14 hari dan buktikan capture outbound dari HP (`source: app`), media, reply, edit/revoke, status delivery/read, referral Ads, retry/dedup, reconnect, history, retention, export, dan deletion.
+4. Validasi dokumen komersial/privasi: harga final, biaya Meta, fair-use/rate limit, SLA/support, DPA, lokasi data, subprocessor, retensi, prosedur ekspor, dan penghapusan.
+5. Bila `source_id` atau `ctwa_clid` tidak hadir pada payload aktual, turunkan attribution ke Partial/Unknown; jangan mengandalkan klaim marketing atau menebak dengan AI.
+6. Jangan berikan API key atau MCP Kirimdev kepada Hermes. Ingestion menerima signed webhook; Hermes hanya memakai DB role `SELECT` pada curated views.
+7. Kelulusan pilot tidak membuktikan identitas CS individual. Ranking individu tetap dilarang sampai ada assignment/login yang verified.
+
 ## 10. Attribution Agen dan Keadilan Penilaian CS
 
 Outbound dari akun WhatsApp bersama tidak selalu membuktikan siapa CS yang mengetik pesan. Identitas agen hanya boleh disebut diketahui jika terdapat bukti eksplisit dan tervalidasi.
@@ -478,7 +526,7 @@ Perbaikan tidak boleh dinyatakan kausal hanya karena terjadi setelah peluncuran.
 
 - Menyetujui jam layanan, SLA, episode, pengecualian, dan attribution window.
 - Menetapkan peran akses, retensi, dan kebijakan review karyawan.
-- Menguji sampel data untuk memahami keterbatasan WAHA.
+- Menguji sampel data Kirimdev dan WAHA untuk memahami coverage, kelengkapan outbound dari HP, metadata Ads, serta keterbatasan masing-masing konektor.
 
 **Gate:** definisi metrik ditandatangani Product, CS Operations, Security/Privacy, dan perwakilan pengguna.
 
@@ -512,17 +560,21 @@ Perbaikan tidak boleh dinyatakan kausal hanya karena terjadi setelah peluncuran.
 - Menghubungkan konversi hanya dari event bisnis tervalidasi.
 - Memisahkan High, Medium, Low, dan Unknown.
 
-### Fase 5 — Evaluasi Cloud API Coexistence
+### Fase 5 — Pilot Kirimdev Cloud API Coexistence dan Keputusan Konektor
 
-- Menilai kelayakan migrasi untuk metadata referral yang lebih baik, identitas agen, stabilitas, dan dukungan resmi.
-- Membandingkan manfaat, biaya, dampak operasional, kebijakan Meta, serta kontinuitas nomor.
-- Migrasi merupakan keputusan terpisah dan bukan prasyarat MVP pasif.
+- Menjalankan pilot 7–14 hari pada nomor/scope terkontrol tanpa memberikan kemampuan kirim kepada Hermes.
+- Membuktikan outbound dari HP, signed webhook, deduplikasi, retry, status pesan, referral Ads, history/reconciliation, serta retensi/export/deletion.
+- Membandingkan capture rate, gap rate, biaya total, beban operasi, privacy/compliance, dan kontinuitas nomor terhadap WAHA.
+- **Gate:** Kirimdev menjadi konektor produksi hanya setelah seluruh kebutuhan kritis terbukti pada payload aktual dan kontrak vendor; jika gagal, WAHA tetap opsi best-effort dengan risk acceptance eksplisit.
 
 ## 17. Risiko dan Mitigasi
 
 | Risiko | Dampak | Mitigasi produk |
 |---|---|---|
 | Sesi WhatsApp Web/WAHA terputus | Data hilang atau terlambat | Freshness indicator, gap detection, periode incomplete, rekonsiliasi |
+| Event Kirimdev/Cloud API tidak lengkap atau terlambat | FRT, attribution, atau timeline salah | Pilot capture-rate, signed webhook, event-ID dedupe, retry monitoring, reconciliation |
+| Credential Kirimdev send-capable bocor ke Hermes | Pesan tidak sah dapat terkirim | Jangan berikan API key/MCP/dashboard credential; webhook-only edge dan DB `SELECT` role |
+| Vendor lock-in, retensi, atau data residency Kirimdev tidak sesuai | Migrasi/compliance terganggu | Review DPA/SLA/subprocessor/export/deletion; simpan canonical events dan adapter portabel |
 | Webhook duplikat atau tidak berurutan | Volume dan waktu respons salah | Deduplikasi, event-time semantics, rekalkulasi terkontrol |
 | Identitas CS tidak tersedia | Penilaian individu salah | Status verified/inferred/unknown; larang ranking tanpa verified attribution |
 | Metadata iklan tidak lengkap | ROAS atau source menyesatkan | Confidence, Unknown bucket, coverage, klaim best-effort |
@@ -538,7 +590,7 @@ Perbaikan tidak boleh dinyatakan kausal hanya karena terjadi setelah peluncuran.
 
 ### AC-01 — Batas Pasif dan Read-Only
 
-**Given** WAHA menerima pesan inbound atau outbound, **when** event tersedia untuk analitik, **then** event dapat tersimpan dan dianalisis tanpa Hermes mengirim, mengedit, menghapus, atau memberi reaksi pada pesan.
+**Given** Kirimdev atau WAHA menerima pesan inbound atau outbound, **when** event tersedia untuk analitik, **then** event dapat tersimpan dan dianalisis tanpa Hermes mengirim, mengedit, menghapus, atau memberi reaksi pada pesan.
 
 **Given** pengguna membuka dashboard, **when** melakukan seluruh aksi yang tersedia, **then** tidak ada aksi yang menghasilkan pesan WhatsApp atau perubahan pada chat sumber.
 
@@ -654,12 +706,13 @@ Perbaikan tidak boleh dinyatakan kausal hanya karena terjadi setelah peluncuran.
 ## 20. Keputusan Produk Utama
 
 - MVP adalah analitik pasif tingkat tim, bukan otomasi percakapan.
-- WAHA hanya menjadi jalur ingestion; Hermes hanya membaca basis data analitik.
+- Kirimdev Cloud API Coexistence menjadi konektor produksi yang direkomendasikan setelah pilot; WAHA menjadi alternatif best-effort/rollback.
+- “Official” berarti transport Cloud API resmi Meta; dokumen tidak mengklaim status Meta Business Partner/BSP vendor tanpa verifikasi direktori resmi.
+- Konektor hanya menjadi jalur ingestion; Hermes hanya membaca curated analytics views dan tidak memegang API key/MCP send-capable.
 - Response-time dilaporkan dengan elapsed dan business-hours clock, tetapi evaluasi layanan memakai business-hours sebagai default.
-- Attribution WhatsApp Web selalu menyertakan confidence dan Unknown bucket.
+- Attribution selalu menyertakan evidence, confidence, coverage, dan Unknown bucket—termasuk pada Cloud API.
 - Skor AI memerlukan bukti, confidence, human review, dan hak koreksi.
 - Penilaian individu dinonaktifkan bila attribution agen tidak verified.
-- WhatsApp Cloud API Coexistence menjadi jalur migrasi masa depan, bukan asumsi kemampuan MVP.
 
 ---
 
@@ -667,7 +720,7 @@ Perbaikan tidak boleh dinyatakan kausal hanya karena terjadi setelah peluncuran.
 
 ### A.1 Prinsip arsitektur
 
-1. **No-send invariant:** ingestion, worker, dashboard, dan Hermes tidak memiliki credential maupun jalur jaringan ke endpoint WAHA untuk send, typing, presence, atau campaign.
+1. **No-send invariant:** ingestion, worker, dashboard, dan Hermes tidak memiliki API key, MCP scope, credential, maupun jalur jaringan ke endpoint Kirimdev/WAHA untuk send, typing, presence, atau campaign.
 2. **Durable before ACK:** webhook baru diberi respons sukses setelah delivery tersimpan secara transaksional; analisis dilakukan asynchronous.
 3. **Append-only source:** edit, revoke, dan perubahan ACK menjadi event baru, bukan menimpa bukti historis.
 4. **Replayable projection:** conversation, response episode, dan aggregate dapat dibangun ulang secara deterministik dari canonical events.
@@ -677,22 +730,26 @@ Perbaikan tidak boleh dinyatakan kausal hanya karena terjadi setelah peluncuran.
 ```mermaid
 flowchart LR
     P[WhatsApp pelanggan] <-->|chat 1:1| HP[WhatsApp Business di HP CS]
-    HP -->|linked device| W[WAHA]
-    W -->|HTTPS webhook + HMAC| E[Webhook Edge]
+    HP -->|Cloud API Coexistence; utama| K[Kirimdev]
+    HP -.->|linked device; alternatif| W[WAHA]
+    K -->|HTTPS signed webhook| E[Webhook Edge]
+    W -.->|HTTPS webhook + HMAC| E
     E --> I[Ingestion API]
     I -->|durable insert lalu ACK| R[(Raw Event Inbox)]
     R --> Q[Durable Queue]
-    Q --> N[Normalizer Worker]
+    Q --> N[Connector Adapter + Normalizer]
     N --> C[(Canonical Events)]
     C --> CP[Conversation Projector]
     CP --> AV[(Curated Analytics Views)]
-    HR[History Reconciler] -->|read-only, incremental| W
+    HR[History Reconciler] -->|read-only, incremental| K
+    HR -.->|read-only, incremental| W
     HR --> R
     AV -->|DB role SELECT-only| H[Hermes Analytics]
     H --> D[Dashboard dan laporan]
     O[(AqiqahPro Orders)] -.->|status order/deal| AV
     M[Meta Ads Insights] -.->|campaign/ad/spend mapping| AV
 
+    H x--x|dilarang| K
     H x--x|dilarang| W
     I x--x|tidak ada send route| HP
 ```
@@ -701,7 +758,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant W as WAHA
+    participant W as Kirimdev / WAHA
     participant I as Ingestion API
     participant D as Durable Inbox
     participant Q as Worker
@@ -726,7 +783,7 @@ sequenceDiagram
 - **Webhook Edge:** TLS, HMAC atas raw body, request-size limit, rate limit, correlation ID.
 - **Ingestion API:** validasi envelope, idempotency, durable inbox, fast ACK.
 - **Queue/worker:** retry terbatas, dead-letter queue, partition berdasarkan `account_id + chat_id`.
-- **Normalizer:** menerjemahkan variasi payload engine WAHA menjadi canonical schema; unknown schema masuk quarantine, bukan ditebak.
+- **Connector adapter/normalizer:** menerjemahkan payload Kirimdev atau variasi engine WAHA menjadi canonical schema; unknown schema masuk quarantine, bukan ditebak.
 - **Projector:** membentuk message current-state, timeline, response episode, attribution, dan aggregate.
 - **History Reconciler:** membaca history secara incremental setelah reconnect atau terjadwal untuk menemukan pesan yang tidak masuk webhook.
 - **Analytics views:** PII-minimized, read-only, mempunyai statement timeout dan row limit untuk Hermes.
@@ -738,7 +795,7 @@ sequenceDiagram
 
 | Entitas | Fungsi dan field penting |
 |---|---|
-| `waha_accounts` | Tenant/session, timezone, status koneksi, `last_event_at` |
+| `connector_accounts` | Tenant, `connector_type` (`kirimdev`/`waha`), phone/account pseudonym, timezone, connection/meta status, `last_event_at` |
 | `webhook_deliveries` | Request ID, event type, payload hash, HMAC status, retry, processing status |
 | `raw_events` | Payload terenkripsi, schema version, expiry; tidak dapat dibaca Hermes |
 | `canonical_events` | Event append-only: account, chat, message ID, direction, occurred/observed time, type, quality flags |
@@ -878,7 +935,7 @@ Skala per dimensi `0–4` atau `N/A`. Setiap hasil menyimpan model version, rubr
 
 - HMAC webhook atas raw body, TLS, replay/idempotency protection, size/depth limit.
 - Tidak ada send-capable credential pada ingestion, worker, maupun Hermes.
-- Reverse proxy/network policy menolak endpoint WAHA send, typing, presence, campaign.
+- Reverse proxy/network policy menolak endpoint Kirimdev/WAHA send, typing, presence, campaign; API key/MCP send-capable tidak pernah diberikan kepada Hermes.
 - Hermes memakai DB role `SELECT` pada curated views; `INSERT/UPDATE/DELETE/DDL` harus gagal.
 - Raw event terenkripsi dan tidak tersedia bagi Hermes.
 - Nomor telepon untuk lookup menggunakan keyed HMAC, bukan hash biasa.
@@ -1028,4 +1085,7 @@ MVP dinyatakan selesai hanya bila:
 
 [1] https://waha.devlike.pro/docs/how-to/events — WAHA Events and Webhooks  
 [2] https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/components — Meta WhatsApp Webhook Payload Reference  
-[3] https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users — Meta WhatsApp Business App Coexistence
+[3] https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users — Meta WhatsApp Business App Coexistence  
+[4] https://kirimdev.com/whatsapp-api-murah/ — Kirimdev WhatsApp API dan harga publik  
+[5] https://docs.kirimdev.com/webhooks/events — Kirimdev Event Catalogue (`message.received`, `message.sent`, `message.status`, phone-app echo)  
+[6] https://docs.kirimdev.com/webhooks/overview — Kirimdev webhook security, signature, retry, dan deduplication
